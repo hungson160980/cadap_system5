@@ -265,35 +265,41 @@ def configure_gemini(api_key):
         st.error(f"Lỗi cấu hình Gemini API: {str(e)}")
         return False
 
-def get_available_model(api_key):
-    """Tự động chọn model khả dụng"""
+def get_available_gemini_model(api_key):
+    """Lấy model khả dụng đầu tiên"""
     try:
         configure_gemini(api_key)
-        # Danh sách models theo thứ tự ưu tiên
-        preferred_models = [
-            'gemini-1.5-flash-latest',
-            'gemini-1.5-flash',
-            'gemini-1.5-pro-latest', 
-            'gemini-1.5-pro',
-            'gemini-pro',
-            'gemini-1.0-pro'
+        
+        # List tất cả models
+        available_models = []
+        for model in genai.list_models():
+            if 'generateContent' in model.supported_generation_methods:
+                available_models.append(model.name)
+        
+        # Ưu tiên các model này theo thứ tự
+        preferred = [
+            'models/gemini-1.5-flash-latest',
+            'models/gemini-1.5-flash',
+            'models/gemini-1.5-pro-latest',
+            'models/gemini-1.5-pro',
+            'models/gemini-pro',
+            'models/gemini-1.0-pro-latest',
+            'models/gemini-1.0-pro'
         ]
         
-        # Thử từng model
-        for model_name in preferred_models:
-            try:
-                model = genai.GenerativeModel(model_name)
-                # Test với prompt đơn giản
-                test_response = model.generate_content("Hi")
-                if test_response:
-                    return model_name
-            except:
-                continue
+        # Tìm model đầu tiên khả dụng
+        for pref_model in preferred:
+            if pref_model in available_models:
+                return pref_model
         
-        # Fallback
-        return 'gemini-pro'
-    except:
-        return 'gemini-pro'
+        # Fallback: dùng model đầu tiên trong list
+        if available_models:
+            return available_models[0]
+        
+        return None
+    except Exception as e:
+        st.error(f"Lỗi list models: {str(e)}")
+        return None
 
 def analyze_with_gemini(api_key, data_source, data_content):
     if not GENAI_AVAILABLE:
@@ -302,8 +308,12 @@ def analyze_with_gemini(api_key, data_source, data_content):
     try:
         configure_gemini(api_key)
         
-        # Tự động chọn model khả dụng
-        model_name = 'gemini-pro'  # Default safe model
+        # Tự động lấy model khả dụng
+        model_name = get_available_gemini_model(api_key)
+        
+        if not model_name:
+            return "❌ Không tìm thấy model Gemini khả dụng. Vui lòng kiểm tra API Key."
+        
         model = genai.GenerativeModel(model_name)
         
         if data_source == "file":
@@ -410,7 +420,16 @@ with st.sidebar:
     if api_key and GENAI_AVAILABLE:
         if configure_gemini(api_key):
             st.success("✅ API Key hợp lệ!")
-            st.caption("🤖 Model: gemini-pro")
+            
+            # Hiển thị model đang dùng
+            with st.spinner("Đang kiểm tra models..."):
+                model_name = get_available_gemini_model(api_key)
+                if model_name:
+                    # Chỉ lấy tên model, bỏ prefix "models/"
+                    display_name = model_name.replace('models/', '')
+                    st.info(f"🤖 Model: {display_name}")
+                else:
+                    st.warning("⚠️ Không tìm thấy model khả dụng")
     
     st.markdown("---")
     st.markdown("### 📤 Upload File")
@@ -426,6 +445,19 @@ with st.sidebar:
                 st.session_state.data_extracted = True
                 st.success("✅ Trích xuất thành công!")
                 st.rerun()
+    
+    # Debug info
+    if api_key and GENAI_AVAILABLE:
+        with st.expander("🔧 Debug - Models Available"):
+            if st.button("List All Models"):
+                try:
+                    configure_gemini(api_key)
+                    st.write("**Models hỗ trợ generateContent:**")
+                    for model in genai.list_models():
+                        if 'generateContent' in model.supported_generation_methods:
+                            st.code(model.name)
+                except Exception as e:
+                    st.error(f"Lỗi: {str(e)}")
 
 # HEADER
 st.markdown('<div class="main-header">🏦 HỆ THỐNG THẨM ĐỊNH PHƯƠNG ÁN KINH DOANH</div>', unsafe_allow_html=True)
@@ -727,10 +759,18 @@ Hãy trả lời ngắn gọn, chuyên nghiệp và hữu ích.
                 with st.spinner("🤖 AI đang suy nghĩ..."):
                     try:
                         configure_gemini(api_key)
-                        model = genai.GenerativeModel('gemini-pro')
-                        prompt = f"{context}\n\nCâu hỏi: {user_input}"
-                        response = model.generate_content(prompt)
-                        ai_response = response.text
+                        
+                        # Tự động lấy model khả dụng
+                        model_name = get_available_gemini_model(api_key)
+                        
+                        if not model_name:
+                            ai_response = "❌ Không tìm thấy model Gemini khả dụng."
+                        else:
+                            model = genai.GenerativeModel(model_name)
+                            prompt = f"{context}\n\nCâu hỏi: {user_input}"
+                            response = model.generate_content(prompt)
+                            ai_response = response.text
+                        
                         st.session_state.chat_history.append({'role': 'assistant', 'content': ai_response})
                     except Exception as e:
                         error_msg = str(e)
