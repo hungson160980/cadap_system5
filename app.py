@@ -265,14 +265,46 @@ def configure_gemini(api_key):
         st.error(f"Lỗi cấu hình Gemini API: {str(e)}")
         return False
 
+def get_available_model(api_key):
+    """Tự động chọn model khả dụng"""
+    try:
+        configure_gemini(api_key)
+        # Danh sách models theo thứ tự ưu tiên
+        preferred_models = [
+            'gemini-1.5-flash-latest',
+            'gemini-1.5-flash',
+            'gemini-1.5-pro-latest', 
+            'gemini-1.5-pro',
+            'gemini-pro',
+            'gemini-1.0-pro'
+        ]
+        
+        # Thử từng model
+        for model_name in preferred_models:
+            try:
+                model = genai.GenerativeModel(model_name)
+                # Test với prompt đơn giản
+                test_response = model.generate_content("Hi")
+                if test_response:
+                    return model_name
+            except:
+                continue
+        
+        # Fallback
+        return 'gemini-pro'
+    except:
+        return 'gemini-pro'
+
 def analyze_with_gemini(api_key, data_source, data_content):
     if not GENAI_AVAILABLE:
         return "Thư viện Google Generative AI chưa được cài đặt."
     
     try:
         configure_gemini(api_key)
-        # Sử dụng model ổn định, không phải experimental
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        
+        # Tự động chọn model khả dụng
+        model_name = 'gemini-pro'  # Default safe model
+        model = genai.GenerativeModel(model_name)
         
         if data_source == "file":
             prompt = f"""
@@ -378,6 +410,7 @@ with st.sidebar:
     if api_key and GENAI_AVAILABLE:
         if configure_gemini(api_key):
             st.success("✅ API Key hợp lệ!")
+            st.caption("🤖 Model: gemini-pro")
     
     st.markdown("---")
     st.markdown("### 📤 Upload File")
@@ -694,7 +727,7 @@ Hãy trả lời ngắn gọn, chuyên nghiệp và hữu ích.
                 with st.spinner("🤖 AI đang suy nghĩ..."):
                     try:
                         configure_gemini(api_key)
-                        model = genai.GenerativeModel('gemini-1.5-flash')
+                        model = genai.GenerativeModel('gemini-pro')
                         prompt = f"{context}\n\nCâu hỏi: {user_input}"
                         response = model.generate_content(prompt)
                         ai_response = response.text
