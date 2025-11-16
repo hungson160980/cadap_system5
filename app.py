@@ -85,7 +85,8 @@ def parse_number(text):
 def call_gemini_api(api_key, prompt):
     """Gọi Gemini API trực tiếp qua REST"""
     try:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={api_key}"
+        # Thử v1 trước (stable hơn)
+        url = f"https://generativelanguage.googleapis.com/v1/models/gemini-pro:generateContent?key={api_key}"
         
         headers = {
             'Content-Type': 'application/json'
@@ -108,10 +109,53 @@ def call_gemini_api(api_key, prompt):
                 return True, text
             else:
                 return False, "Không nhận được phản hồi từ AI"
+        elif response.status_code == 404:
+            # Nếu v1 không work, thử v1beta
+            url_beta = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={api_key}"
+            response_beta = requests.post(url_beta, headers=headers, json=data, timeout=30)
+            
+            if response_beta.status_code == 200:
+                result = response_beta.json()
+                if 'candidates' in result and len(result['candidates']) > 0:
+                    text = result['candidates'][0]['content']['parts'][0]['text']
+                    return True, text
+            
+            # Nếu cả 2 đều fail
+            return False, f"""❌ Không tìm thấy model gemini-pro
+
+🔧 GIẢI PHÁP:
+
+API key của bạn có thể không có quyền truy cập Gemini API.
+
+**Thử các bước sau:**
+
+1. **Enable Generative AI API:**
+   - Vào: https://console.cloud.google.com/apis/library/generativelanguage.googleapis.com
+   - Click "Enable"
+   - Đợi 1-2 phút
+   - Thử lại
+
+2. **Tạo API Key mới với project MỚI:**
+   - Vào: https://aistudio.google.com/app/apikey
+   - Click "Create API key"
+   - **BẮT BUỘC chọn: "Create API key in NEW project"**
+   - Copy key mới
+   - Paste vào app
+
+3. **Thử tài khoản Google khác:**
+   - Một số account bị restrict
+   - Tạo Gmail mới
+   - Thử lại
+
+4. **Dùng VPN:**
+   - Chọn region: US, Singapore, hoặc EU
+   - Tạo key mới
+   - Thử lại
+"""
         elif response.status_code == 429:
             return False, "⚠️ Vượt giới hạn API! Vui lòng đợi 1 phút hoặc tạo API Key mới."
         elif response.status_code == 400:
-            return False, f"❌ API Key không hợp lệ hoặc hết hạn. Vui lòng tạo key mới tại: https://aistudio.google.com/app/apikey"
+            return False, f"❌ API Key không hợp lệ. Vui lòng tạo key mới tại: https://aistudio.google.com/app/apikey"
         else:
             return False, f"Lỗi API {response.status_code}: {response.text}"
             
@@ -130,20 +174,34 @@ def test_gemini_key(api_key):
         if not api_key.startswith('AIzaSy'):
             return False, "API Key phải bắt đầu bằng 'AIzaSy'"
         
-        # Test với API
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={api_key}"
-        
+        # Test với v1 API trước
+        url_v1 = f"https://generativelanguage.googleapis.com/v1/models/gemini-pro:generateContent?key={api_key}"
         headers = {'Content-Type': 'application/json'}
         data = {"contents": [{"parts": [{"text": "Hi"}]}]}
         
-        response = requests.post(url, headers=headers, json=data, timeout=10)
+        response = requests.post(url_v1, headers=headers, json=data, timeout=10)
         
         if response.status_code == 200:
-            return True, "OK"
+            return True, "OK (v1 API)"
+        
+        # Nếu v1 fail, thử v1beta
+        if response.status_code == 404:
+            url_v1beta = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={api_key}"
+            response_beta = requests.post(url_v1beta, headers=headers, json=data, timeout=10)
+            
+            if response_beta.status_code == 200:
+                return True, "OK (v1beta API)"
+            elif response_beta.status_code == 400:
+                return False, "API Key không hợp lệ"
+            elif response_beta.status_code == 403:
+                return False, "API Key không có quyền truy cập Generative AI API"
+            else:
+                return False, f"Lỗi 404: Model không khả dụng cho API key này"
+        
         elif response.status_code == 400:
             return False, "API Key không hợp lệ hoặc sai format"
         elif response.status_code == 403:
-            return False, "API Key không có quyền truy cập"
+            return False, "API Key không có quyền - Cần enable Generative AI API"
         else:
             return False, f"Lỗi {response.status_code}"
             
