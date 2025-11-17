@@ -5,15 +5,22 @@ from docx import Document
 import io
 import re
 from datetime import datetime
-import requests
 import json
+import time
 
 # Import có điều kiện
 try:
     import plotly.express as px
+    import plotly.graph_objects as go
     PLOTLY_AVAILABLE = True
 except ImportError:
     PLOTLY_AVAILABLE = False
+
+try:
+    import google.generativeai as genai
+    GENAI_AVAILABLE = True
+except ImportError:
+    GENAI_AVAILABLE = False
 
 # Cấu hình trang
 st.set_page_config(
@@ -23,7 +30,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# CSS
+# CSS tùy chỉnh
 st.markdown("""
 <style>
     .main-header {
@@ -36,25 +43,33 @@ st.markdown("""
         border-radius: 10px;
         margin-bottom: 2rem;
     }
+    .metric-card {
+        background: white;
+        padding: 1rem;
+        border-radius: 10px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
     .stTabs [data-baseweb="tab-list"] {
-        gap: 8px;
-        overflow-x: auto;
+        gap: 24px;
     }
     .stTabs [data-baseweb="tab"] {
-        height: 45px;
-        padding: 0 16px;
-        font-size: 0.95rem;
+        height: 50px;
+        padding: 0 24px;
         background-color: #f0f2f6;
-        border-radius: 8px 8px 0 0;
+        border-radius: 5px 5px 0 0;
     }
     .stTabs [aria-selected="true"] {
         background-color: #1f77b4;
-        color: white !important;
+        color: white;
+    }
+    div[data-testid="stNumberInput"] input {
+        font-weight: bold;
+        color: #1f77b4;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# Session state
+# Khởi tạo session state
 if 'data_extracted' not in st.session_state:
     st.session_state.data_extracted = False
 if 'customer_info' not in st.session_state:
@@ -65,152 +80,32 @@ if 'collateral_info' not in st.session_state:
     st.session_state.collateral_info = {}
 if 'chat_history' not in st.session_state:
     st.session_state.chat_history = []
+if 'data_modified' not in st.session_state:
+    st.session_state.data_modified = False
 if 'uploaded_content' not in st.session_state:
     st.session_state.uploaded_content = ""
+if 'last_request_time' not in st.session_state:
+    st.session_state.last_request_time = 0
 
+# Hàm định dạng số
 def format_number(num):
+    """Định dạng số với dấu chấm phân cách hàng nghìn"""
     try:
         return "{:,.0f}".format(float(num)).replace(",", ".")
     except:
         return str(num)
 
 def parse_number(text):
+    """Chuyển đổi text thành số"""
     try:
         clean_text = str(text).replace(".", "").replace(",", ".")
         return float(clean_text)
     except:
         return 0
 
-# GEMINI API qua REST - Không dùng SDK
-def call_gemini_api(api_key, prompt):
-    """Gọi Gemini API trực tiếp qua REST"""
-    try:
-        # Thử v1 trước (stable hơn)
-        url = f"https://generativelanguage.googleapis.com/v1/models/gemini-pro:generateContent?key={api_key}"
-        
-        headers = {
-            'Content-Type': 'application/json'
-        }
-        
-        data = {
-            "contents": [{
-                "parts": [{
-                    "text": prompt
-                }]
-            }]
-        }
-        
-        response = requests.post(url, headers=headers, json=data, timeout=30)
-        
-        if response.status_code == 200:
-            result = response.json()
-            if 'candidates' in result and len(result['candidates']) > 0:
-                text = result['candidates'][0]['content']['parts'][0]['text']
-                return True, text
-            else:
-                return False, "Không nhận được phản hồi từ AI"
-        elif response.status_code == 404:
-            # Nếu v1 không work, thử v1beta
-            url_beta = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={api_key}"
-            response_beta = requests.post(url_beta, headers=headers, json=data, timeout=30)
-            
-            if response_beta.status_code == 200:
-                result = response_beta.json()
-                if 'candidates' in result and len(result['candidates']) > 0:
-                    text = result['candidates'][0]['content']['parts'][0]['text']
-                    return True, text
-            
-            # Nếu cả 2 đều fail
-            return False, f"""❌ Không tìm thấy model gemini-pro
-
-🔧 GIẢI PHÁP:
-
-API key của bạn có thể không có quyền truy cập Gemini API.
-
-**Thử các bước sau:**
-
-1. **Enable Generative AI API:**
-   - Vào: https://console.cloud.google.com/apis/library/generativelanguage.googleapis.com
-   - Click "Enable"
-   - Đợi 1-2 phút
-   - Thử lại
-
-2. **Tạo API Key mới với project MỚI:**
-   - Vào: https://aistudio.google.com/app/apikey
-   - Click "Create API key"
-   - **BẮT BUỘC chọn: "Create API key in NEW project"**
-   - Copy key mới
-   - Paste vào app
-
-3. **Thử tài khoản Google khác:**
-   - Một số account bị restrict
-   - Tạo Gmail mới
-   - Thử lại
-
-4. **Dùng VPN:**
-   - Chọn region: US, Singapore, hoặc EU
-   - Tạo key mới
-   - Thử lại
-"""
-        elif response.status_code == 429:
-            return False, "⚠️ Vượt giới hạn API! Vui lòng đợi 1 phút hoặc tạo API Key mới."
-        elif response.status_code == 400:
-            return False, f"❌ API Key không hợp lệ. Vui lòng tạo key mới tại: https://aistudio.google.com/app/apikey"
-        else:
-            return False, f"Lỗi API {response.status_code}: {response.text}"
-            
-    except requests.exceptions.Timeout:
-        return False, "⏱️ Timeout - Vui lòng thử lại"
-    except Exception as e:
-        return False, f"Lỗi: {str(e)}"
-
-def test_gemini_key(api_key):
-    """Test API key with better error handling"""
-    try:
-        # Kiểm tra format cơ bản
-        if not api_key or len(api_key) < 30:
-            return False, "API Key quá ngắn"
-        
-        if not api_key.startswith('AIzaSy'):
-            return False, "API Key phải bắt đầu bằng 'AIzaSy'"
-        
-        # Test với v1 API trước
-        url_v1 = f"https://generativelanguage.googleapis.com/v1/models/gemini-pro:generateContent?key={api_key}"
-        headers = {'Content-Type': 'application/json'}
-        data = {"contents": [{"parts": [{"text": "Hi"}]}]}
-        
-        response = requests.post(url_v1, headers=headers, json=data, timeout=10)
-        
-        if response.status_code == 200:
-            return True, "OK (v1 API)"
-        
-        # Nếu v1 fail, thử v1beta
-        if response.status_code == 404:
-            url_v1beta = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={api_key}"
-            response_beta = requests.post(url_v1beta, headers=headers, json=data, timeout=10)
-            
-            if response_beta.status_code == 200:
-                return True, "OK (v1beta API)"
-            elif response_beta.status_code == 400:
-                return False, "API Key không hợp lệ"
-            elif response_beta.status_code == 403:
-                return False, "API Key không có quyền truy cập Generative AI API"
-            else:
-                return False, f"Lỗi 404: Model không khả dụng cho API key này"
-        
-        elif response.status_code == 400:
-            return False, "API Key không hợp lệ hoặc sai format"
-        elif response.status_code == 403:
-            return False, "API Key không có quyền - Cần enable Generative AI API"
-        else:
-            return False, f"Lỗi {response.status_code}"
-            
-    except requests.exceptions.Timeout:
-        return False, "Timeout - Kiểm tra kết nối internet"
-    except Exception as e:
-        return False, f"Lỗi: {str(e)}"
-
+# Hàm trích xuất thông tin từ file docx
 def extract_info_from_docx(file):
+    """Trích xuất thông tin từ file docx"""
     doc = Document(file)
     full_text = '\n'.join([para.text for para in doc.paragraphs])
     st.session_state.uploaded_content = full_text
@@ -219,6 +114,7 @@ def extract_info_from_docx(file):
     financial_info = {}
     collateral_info = {}
     
+    # Trích xuất thông tin khách hàng
     name_match = re.search(r'Họ và tên:\s*([^\n\r-]+)', full_text)
     if name_match:
         customer_info['name'] = name_match.group(1).strip()
@@ -239,6 +135,7 @@ def extract_info_from_docx(file):
     if email_match:
         customer_info['email'] = email_match.group(1).strip()
     
+    # Trích xuất thông tin tài chính
     total_need_match = re.search(r'Tổng nhu cầu vốn:\s*([\d.,]+)\s*đồng', full_text)
     if total_need_match:
         financial_info['total_need'] = parse_number(total_need_match.group(1))
@@ -277,6 +174,11 @@ def extract_info_from_docx(file):
     if expense_match:
         financial_info['monthly_expense'] = parse_number(expense_match.group(1))
     
+    project_income_match = re.search(r'Thu nhập từ kinh doanh[^:]*:\s*([\d.,]+)\s*đồng/tháng', full_text)
+    if project_income_match:
+        financial_info['project_income'] = parse_number(project_income_match.group(1))
+    
+    # Trích xuất thông tin tài sản đảm bảo
     collateral_type_match = re.search(r'Tài sản \d+:\s*([^\n\r.]+)', full_text)
     if collateral_type_match:
         collateral_info['type'] = collateral_type_match.group(1).strip()
@@ -301,7 +203,9 @@ def extract_info_from_docx(file):
     
     return customer_info, financial_info, collateral_info
 
+# Hàm tính toán các chỉ tiêu tài chính
 def calculate_financial_metrics(financial_info):
+    """Tính toán các chỉ tiêu tài chính"""
     metrics = {}
     
     loan_amount = financial_info.get('loan_amount', 0)
@@ -312,6 +216,7 @@ def calculate_financial_metrics(financial_info):
     
     if loan_amount > 0 and loan_term > 0:
         monthly_principal = loan_amount / loan_term
+        
         repayment_schedule = []
         remaining_balance = loan_amount
         
@@ -343,38 +248,122 @@ def calculate_financial_metrics(financial_info):
         
     return metrics
 
+# Hàm cấu hình Gemini API
+def configure_gemini(api_key):
+    """Cấu hình Gemini API"""
+    if not GENAI_AVAILABLE:
+        return False
+    try:
+        genai.configure(api_key=api_key)
+        return True
+    except Exception as e:
+        st.error(f"Lỗi cấu hình Gemini API: {str(e)}")
+        return False
+
+# Hàm retry với exponential backoff
+def retry_with_backoff(func, max_retries=3, initial_delay=2):
+    """Retry function with exponential backoff"""
+    for attempt in range(max_retries):
+        try:
+            return func()
+        except Exception as e:
+            error_str = str(e)
+            if "429" in error_str or "quota" in error_str.lower():
+                if attempt < max_retries - 1:
+                    delay = initial_delay * (2 ** attempt)
+                    # Tìm retry_delay trong error message
+                    retry_match = re.search(r'retry in ([\d.]+)s', error_str)
+                    if retry_match:
+                        delay = float(retry_match.group(1)) + 1
+                    
+                    st.warning(f"⏳ Rate limit reached. Đang chờ {delay:.0f} giây trước khi thử lại... (Lần {attempt + 1}/{max_retries})")
+                    time.sleep(delay)
+                else:
+                    raise Exception(f"Đã thử {max_retries} lần nhưng vẫn gặp lỗi rate limit. Vui lòng:\n"
+                                  f"1. Đợi vài phút rồi thử lại\n"
+                                  f"2. Chọn model khác (gemini-1.5-flash hoặc gemini-1.5-pro)\n"
+                                  f"3. Kiểm tra quota tại: https://ai.dev/usage")
+            else:
+                raise e
+    return None
+
+# Hàm phân tích bằng Gemini với retry logic
 def analyze_with_gemini(api_key, data_source, data_content):
-    if data_source == "file":
-        prompt = f"""Bạn là chuyên gia phân tích tín dụng ngân hàng. Hãy phân tích chi tiết phương án vay vốn:
-
-{data_content}
-
-Yêu cầu:
-1. Đánh giá tổng quan
-2. Điểm mạnh và điểm yếu
-3. Khả năng trả nợ
-4. Rủi ro
-5. Kết luận
-
-Trả lời ngắn gọn, chuyên sâu."""
-    else:
-        prompt = f"""Bạn là chuyên gia phân tích tín dụng. Phân tích các chỉ tiêu:
-
-{data_content}
-
-Yêu cầu:
-1. Đánh giá chỉ tiêu
-2. So sánh tiêu chuẩn
-3. Khả năng trả nợ
-4. Rủi ro
-5. Khuyến nghị
-
-Trả lời ngắn gọn, chuyên sâu."""
+    """Phân tích dữ liệu bằng Gemini với retry logic"""
+    if not GENAI_AVAILABLE:
+        return "⚠️ Thư viện Google Generative AI chưa được cài đặt.\nVui lòng chạy: pip install google-generativeai"
     
-    success, response = call_gemini_api(api_key, prompt)
-    return response
+    # Rate limiting - đảm bảo ít nhất 2 giây giữa các request
+    current_time = time.time()
+    time_since_last = current_time - st.session_state.last_request_time
+    if time_since_last < 2:
+        time.sleep(2 - time_since_last)
+    
+    try:
+        configure_gemini(api_key)
+        
+        def make_request():
+            model = genai.GenerativeModel('gemini-2.0-flash')
+            
+            if data_source == "file":
+                prompt = f"""
+Bạn là chuyên gia phân tích tín dụng ngân hàng. Hãy phân tích chi tiết phương án vay vốn dưới đây:
 
+{data_content}
+
+Yêu cầu phân tích:
+1. Đánh giá tổng quan về phương án
+2. Phân tích điểm mạnh và điểm yếu
+3. Đánh giá khả năng trả nợ
+4. Phân tích rủi ro
+5. Kết luận và đề xuất
+
+Hãy trình bày ngắn gọn nhưng đầy đủ và chuyên sâu.
+"""
+            else:
+                prompt = f"""
+Bạn là chuyên gia phân tích tín dụng ngân hàng. Hãy phân tích các chỉ tiêu tài chính sau:
+
+{data_content}
+
+Yêu cầu phân tích:
+1. Đánh giá các chỉ tiêu tài chính quan trọng
+2. So sánh với tiêu chuẩn ngân hàng
+3. Phân tích khả năng trả nợ và dòng tiền
+4. Đánh giá mức độ rủi ro
+5. Kết luận và khuyến nghị
+
+Hãy trình bày ngắn gọn nhưng đầy đủ và chuyên sâu.
+"""
+            
+            response = model.generate_content(prompt)
+            st.session_state.last_request_time = time.time()
+            return response.text
+        
+        return retry_with_backoff(make_request)
+        
+    except Exception as e:
+        error_msg = str(e)
+        if "429" in error_msg or "quota" in error_msg.lower():
+            return f"""
+⚠️ **LỖI RATE LIMIT / QUOTA**
+
+API key của bạn đã vượt quá giới hạn sử dụng.
+
+**Giải pháp:**
+1. **Đợi một lúc** (thường là 1-2 phút) rồi thử lại
+2. **Chọn model khác** ở dropdown bên dưới (gemini-1.5-flash hoặc gemini-1.5-pro)
+3. **Kiểm tra usage**: https://ai.dev/usage?tab=rate-limit
+4. **Tạo API key mới**: https://aistudio.google.com/app/apikey
+
+**Chi tiết lỗi:** {error_msg}
+"""
+        else:
+            return f"❌ Lỗi phân tích: {error_msg}"
+
+# Hàm xuất Excel
 def export_to_excel(repayment_schedule):
+    """Xuất bảng kế hoạch trả nợ ra Excel"""
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         df = repayment_schedule.copy()
@@ -383,7 +372,9 @@ def export_to_excel(repayment_schedule):
         df.to_excel(writer, sheet_name='Kế hoạch trả nợ', index=False)
     return output.getvalue()
 
+# Hàm xuất báo cáo thẩm định
 def export_appraisal_report(customer_info, financial_info, collateral_info, metrics, analysis_file, analysis_metrics):
+    """Xuất báo cáo thẩm định ra Word"""
     doc = Document()
     
     title = doc.add_heading('BÁO CÁO THẨM ĐỊNH PHƯƠNG ÁN VAY VỐN', 0)
@@ -394,22 +385,41 @@ def export_appraisal_report(customer_info, financial_info, collateral_info, metr
     doc.add_paragraph(f"CCCD: {customer_info.get('cccd', 'N/A')}")
     doc.add_paragraph(f"Địa chỉ: {customer_info.get('address', 'N/A')}")
     doc.add_paragraph(f"Số điện thoại: {customer_info.get('phone', 'N/A')}")
+    doc.add_paragraph(f"Email: {customer_info.get('email', 'N/A')}")
     
     doc.add_heading('II. THÔNG TIN TÀI CHÍNH', 1)
+    doc.add_paragraph(f"Mục đích vay: {financial_info.get('purpose', 'N/A')}")
+    doc.add_paragraph(f"Tổng nhu cầu vốn: {format_number(financial_info.get('total_need', 0))} đồng")
+    doc.add_paragraph(f"Vốn đối ứng: {format_number(financial_info.get('equity', 0))} đồng")
     doc.add_paragraph(f"Số tiền vay: {format_number(financial_info.get('loan_amount', 0))} đồng")
     doc.add_paragraph(f"Lãi suất: {financial_info.get('interest_rate', 0)}%/năm")
-    doc.add_paragraph(f"Thời hạn: {financial_info.get('loan_term', 0)} tháng")
+    doc.add_paragraph(f"Thời hạn vay: {financial_info.get('loan_term', 0)} tháng")
+    doc.add_paragraph(f"Thu nhập hàng tháng: {format_number(financial_info.get('monthly_income', 0))} đồng")
+    doc.add_paragraph(f"Chi phí hàng tháng: {format_number(financial_info.get('monthly_expense', 0))} đồng")
     
-    doc.add_heading('III. CHỈ TIÊU TÀI CHÍNH', 1)
-    doc.add_paragraph(f"DSCR: {metrics.get('dscr', 0):.2f}")
+    doc.add_heading('III. TÀI SẢN ĐẢM BẢO', 1)
+    doc.add_paragraph(f"Loại tài sản: {collateral_info.get('type', 'N/A')}")
+    doc.add_paragraph(f"Giá trị: {format_number(collateral_info.get('value', 0))} đồng")
+    doc.add_paragraph(f"Địa chỉ: {collateral_info.get('address', 'N/A')}")
+    if collateral_info.get('area'):
+        doc.add_paragraph(f"Diện tích: {format_number(collateral_info.get('area', 0))} m²")
+    
+    doc.add_heading('IV. CÁC CHỈ TIÊU TÀI CHÍNH', 1)
+    doc.add_paragraph(f"Trả nợ gốc hàng tháng: {format_number(metrics.get('monthly_principal', 0))} đồng")
+    doc.add_paragraph(f"Trả lãi tháng đầu: {format_number(metrics.get('first_month_interest', 0))} đồng")
+    doc.add_paragraph(f"Tổng trả tháng đầu: {format_number(metrics.get('first_month_payment', 0))} đồng")
+    doc.add_paragraph(f"Tổng lãi phải trả: {format_number(metrics.get('total_interest', 0))} đồng")
+    doc.add_paragraph(f"Thu nhập ròng: {format_number(metrics.get('net_income', 0))} đồng")
     doc.add_paragraph(f"Tỷ lệ trả nợ/thu nhập: {metrics.get('debt_service_ratio', 0):.2f}%")
+    doc.add_paragraph(f"Số dư sau trả nợ: {format_number(metrics.get('surplus', 0))} đồng")
+    doc.add_paragraph(f"DSCR: {metrics.get('dscr', 0):.2f}")
     
     if analysis_file:
-        doc.add_heading('IV. PHÂN TÍCH TỪ FILE', 1)
+        doc.add_heading('V. PHÂN TÍCH TỪ FILE UPLOAD', 1)
         doc.add_paragraph(analysis_file)
     
     if analysis_metrics:
-        doc.add_heading('V. PHÂN TÍCH TỪ CHỈ SỐ', 1)
+        doc.add_heading('VI. PHÂN TÍCH TỪ CÁC CHỈ SỐ', 1)
         doc.add_paragraph(analysis_metrics)
     
     output = io.BytesIO()
@@ -419,244 +429,573 @@ def export_appraisal_report(customer_info, financial_info, collateral_info, metr
 
 # SIDEBAR
 with st.sidebar:
-    st.markdown("### 🔑 API Configuration")
-    api_key = st.text_input("Gemini API Key:", type="password", 
-                            help="Get free key: https://aistudio.google.com/app/apikey")
+    st.markdown("### 🔑 Cấu Hình API")
+    api_key = st.text_input("Nhập Gemini API Key:", type="password", help="Nhập API key từ Google AI Studio")
     
-    if api_key:
-        # Kiểm tra độ dài trước
-        if len(api_key.strip()) < 30:
-            st.error("❌ API Key quá ngắn! Key phải ~39 ký tự")
-            st.info("💡 Format: AIzaSy + 32 ký tự")
-        elif not api_key.strip().startswith('AIzaSy'):
-            st.error("❌ API Key phải bắt đầu bằng 'AIzaSy'")
-            st.info("💡 Copy lại key từ Google AI Studio")
+    if api_key and GENAI_AVAILABLE:
+        if configure_gemini(api_key):
+            st.success("✅ API Key hợp lệ!")
         else:
-            with st.spinner("Testing API..."):
-                success, message = test_gemini_key(api_key.strip())
-                if success:
-                    st.success("✅ API Key OK!")
-                    st.caption("🤖 Using: gemini-pro (REST API)")
-                else:
-                    st.error(f"❌ {message}")
-                    with st.expander("🔧 Hướng dẫn fix"):
-                        st.markdown("""
-                        **Các bước kiểm tra:**
-                        
-                        1. **Tạo API Key mới:**
-                           - Vào: https://aistudio.google.com/app/apikey
-                           - Click "Create API key"
-                           - Chọn "Create API key in new project"
-                           - Copy key mới
-                        
-                        2. **Copy đúng cách:**
-                           - Click nút "Copy" (không tự gõ)
-                           - Paste trực tiếp (không thêm/bớt gì)
-                           - Không có khoảng trắng
-                        
-                        3. **Kiểm tra:**
-                           - Key bắt đầu: AIzaSy
-                           - Độ dài: ~39 ký tự
-                           - Chỉ chữ + số
-                        
-                        4. **Nếu vẫn lỗi:**
-                           - Xóa key cũ trên Google AI Studio
-                           - Tạo key hoàn toàn mới
-                           - Thử lại
-                        """)
+            st.error("❌ API Key không hợp lệ!")
+    elif api_key and not GENAI_AVAILABLE:
+        st.warning("⚠️ Thư viện google-generativeai chưa được cài đặt!")
     
     st.markdown("---")
     st.markdown("### 📤 Upload File")
-    uploaded_file = st.file_uploader("PASDV (.docx)", type=['docx'])
+    uploaded_file = st.file_uploader("Chọn file PASDV (.docx)", type=['docx'])
     
-    if uploaded_file:
-        if st.button("🔍 Extract", use_container_width=True):
-            with st.spinner("Processing..."):
+    if uploaded_file is not None:
+        if st.button("🔍 Trích Xuất Dữ Liệu", use_container_width=True):
+            with st.spinner("Đang xử lý..."):
                 customer_info, financial_info, collateral_info = extract_info_from_docx(uploaded_file)
                 st.session_state.customer_info = customer_info
                 st.session_state.financial_info = financial_info
                 st.session_state.collateral_info = collateral_info
                 st.session_state.data_extracted = True
-                st.success("✅ Done!")
+                st.session_state.data_modified = False
+                st.success("✅ Trích xuất thành công!")
                 st.rerun()
 
 # HEADER
-st.markdown('<div class="main-header">🏦 HỆ THỐNG THẨM ĐỊNH</div>', unsafe_allow_html=True)
+st.markdown('<div class="main-header">🏦 HỆ THỐNG THẨM ĐỊNH PHƯƠNG ÁN KINH DOANH</div>', unsafe_allow_html=True)
 
-# MAIN
+# MAIN CONTENT
 if st.session_state.data_extracted:
-    tabs = st.tabs(["👤 KH", "💰 Tài Chính", "🏠 TSĐB", "📊 Chỉ Tiêu", "📈 Đồ Thị", "🤖 AI", "💬 Chat", "📥 Xuất"])
+    tabs = st.tabs([
+        "📋 Thông Tin KH",
+        "💰 Thông Tin Tài Chính", 
+        "🏠 Tài Sản Đảm Bảo",
+        "📊 Chỉ Tiêu & Kế Hoạch",
+        "📈 Biểu Đồ",
+        "🤖 Phân Tích AI",
+        "💬 Chatbox AI",
+        "📥 Xuất Dữ Liệu"
+    ])
     
+    # TAB 1: Thông tin khách hàng
     with tabs[0]:
-        st.subheader("👤 Thông Tin Khách Hàng")
-        col1, col2 = st.columns(2)
-        with col1:
-            name = st.text_input("Họ tên:", value=st.session_state.customer_info.get('name', ''))
-            cccd = st.text_input("CCCD:", value=st.session_state.customer_info.get('cccd', ''))
-        with col2:
-            phone = st.text_input("ĐT:", value=st.session_state.customer_info.get('phone', ''))
-            email = st.text_input("Email:", value=st.session_state.customer_info.get('email', ''))
+        st.subheader("📋 Thông Tin Định Danh Khách Hàng")
         
-        if st.button("💾 Lưu", key="save1"):
-            st.session_state.customer_info.update({'name': name, 'cccd': cccd, 'phone': phone, 'email': email})
-            st.success("✅ Saved!")
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            name = st.text_input("Họ và tên:", value=st.session_state.customer_info.get('name', ''))
+            cccd = st.text_input("CCCD:", value=st.session_state.customer_info.get('cccd', ''))
+            phone = st.text_input("Số điện thoại:", value=st.session_state.customer_info.get('phone', ''))
+        
+        with col2:
+            email = st.text_input("Email:", value=st.session_state.customer_info.get('email', ''))
+            address = st.text_area("Địa chỉ:", value=st.session_state.customer_info.get('address', ''), height=100)
+        
+        if st.button("💾 Lưu Thay Đổi", key="save_customer"):
+            st.session_state.customer_info.update({
+                'name': name,
+                'cccd': cccd,
+                'phone': phone,
+                'email': email,
+                'address': address
+            })
+            st.session_state.data_modified = True
+            st.success("✅ Đã lưu thay đổi!")
     
+    # TAB 2: Thông tin tài chính
     with tabs[1]:
         st.subheader("💰 Thông Tin Tài Chính")
-        col1, col2 = st.columns(2)
-        with col1:
-            loan_amount = st.number_input("Số vay (đ):", value=float(st.session_state.financial_info.get('loan_amount', 0)), step=1000000.0)
-            interest_rate = st.number_input("Lãi suất (%/năm):", value=float(st.session_state.financial_info.get('interest_rate', 8.5)), step=0.1)
-            loan_term = st.number_input("Thời hạn (tháng):", value=int(st.session_state.financial_info.get('loan_term', 60)), step=1)
-        with col2:
-            monthly_income = st.number_input("Thu nhập/tháng (đ):", value=float(st.session_state.financial_info.get('monthly_income', 0)), step=1000000.0)
-            monthly_expense = st.number_input("Chi phí/tháng (đ):", value=float(st.session_state.financial_info.get('monthly_expense', 0)), step=1000000.0)
         
-        if st.button("💾 Lưu", key="save2"):
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("#### Thông Tin Vay Vốn")
+            purpose = st.text_area("Mục đích vay:", value=st.session_state.financial_info.get('purpose', ''), height=80)
+            
+            total_need_input = st.text_input("Tổng nhu cầu vốn (đồng):", 
+                                        value=format_number(st.session_state.financial_info.get('total_need', 0)),
+                                        help="Nhập số, có thể dùng dấu chấm phân cách")
+            total_need = parse_number(total_need_input)
+            
+            equity_input = st.text_input("Vốn đối ứng (đồng):", 
+                                    value=format_number(st.session_state.financial_info.get('equity', 0)),
+                                    help="Nhập số, có thể dùng dấu chấm phân cách")
+            equity = parse_number(equity_input)
+            
+            loan_amount_input = st.text_input("Số tiền vay (đồng):", 
+                                         value=format_number(st.session_state.financial_info.get('loan_amount', 0)),
+                                         help="Nhập số, có thể dùng dấu chấm phân cách")
+            loan_amount = parse_number(loan_amount_input)
+            
+            interest_rate_input = st.text_input("Lãi suất (%/năm):", 
+                                           value=str(st.session_state.financial_info.get('interest_rate', 8.5)).replace('.', ','),
+                                           help="Ví dụ: 8,5 hoặc 8.5")
+            interest_rate = float(interest_rate_input.replace(',', '.')) if interest_rate_input else 0
+            
+            loan_term_input = st.text_input("Thời hạn vay (tháng):", 
+                                       value=str(int(st.session_state.financial_info.get('loan_term', 60))),
+                                       help="Nhập số tháng")
+            loan_term = int(loan_term_input) if loan_term_input else 0
+        
+        with col2:
+            st.markdown("#### Thu Chi Hàng Tháng")
+            
+            monthly_income_input = st.text_input("Thu nhập hàng tháng (đồng):", 
+                                            value=format_number(st.session_state.financial_info.get('monthly_income', 0)),
+                                            help="Nhập số, có thể dùng dấu chấm phân cách")
+            monthly_income = parse_number(monthly_income_input)
+            
+            monthly_expense_input = st.text_input("Chi phí hàng tháng (đồng):", 
+                                             value=format_number(st.session_state.financial_info.get('monthly_expense', 0)),
+                                             help="Nhập số, có thể dùng dấu chấm phân cách")
+            monthly_expense = parse_number(monthly_expense_input)
+            
+            project_income_input = st.text_input("Thu nhập từ dự án (đồng/tháng):", 
+                                            value=format_number(st.session_state.financial_info.get('project_income', 0)),
+                                            help="Nhập số, có thể dùng dấu chấm phân cách")
+            project_income = parse_number(project_income_input)
+            
+            if total_need > 0:
+                equity_ratio = (equity / total_need) * 100
+                st.metric("Tỷ lệ vốn đối ứng", f"{equity_ratio:.2f}%")
+        
+        if st.button("💾 Lưu Thay Đổi", key="save_financial"):
             st.session_state.financial_info.update({
-                'loan_amount': loan_amount, 'interest_rate': interest_rate, 
-                'loan_term': loan_term, 'monthly_income': monthly_income, 
-                'monthly_expense': monthly_expense
+                'purpose': purpose,
+                'total_need': total_need,
+                'equity': equity,
+                'loan_amount': loan_amount,
+                'interest_rate': interest_rate,
+                'loan_term': loan_term,
+                'monthly_income': monthly_income,
+                'monthly_expense': monthly_expense,
+                'project_income': project_income
             })
-            st.success("✅ Saved!")
+            st.session_state.data_modified = True
+            st.success("✅ Đã lưu thay đổi!")
     
+    # TAB 3: Tài sản đảm bảo
     with tabs[2]:
         st.subheader("🏠 Tài Sản Đảm Bảo")
+        
         col1, col2 = st.columns(2)
+        
         with col1:
-            collateral_value = st.number_input("Giá trị (đ):", value=float(st.session_state.collateral_info.get('value', 0)), step=1000000.0)
+            collateral_type = st.text_input("Loại tài sản:", 
+                                           value=st.session_state.collateral_info.get('type', ''))
+            
+            collateral_value_input = st.text_input("Giá trị tài sản (đồng):", 
+                                              value=format_number(st.session_state.collateral_info.get('value', 0)),
+                                              help="Nhập số, có thể dùng dấu chấm phân cách")
+            collateral_value = parse_number(collateral_value_input)
+            
+            collateral_area_input = st.text_input("Diện tích (m²):", 
+                                             value=str(st.session_state.collateral_info.get('area', 0)).replace('.', ','),
+                                             help="Ví dụ: 120,50 hoặc 120.5")
+            collateral_area = float(collateral_area_input.replace(',', '.')) if collateral_area_input else 0
+        
         with col2:
+            collateral_address = st.text_area("Địa chỉ tài sản:", 
+                                             value=st.session_state.collateral_info.get('address', ''),
+                                             height=100)
+            
             if collateral_value > 0 and st.session_state.financial_info.get('loan_amount', 0) > 0:
                 ltv = (st.session_state.financial_info['loan_amount'] / collateral_value) * 100
-                st.metric("LTV", f"{ltv:.2f}%")
+                st.metric("Tỷ lệ LTV", f"{ltv:.2f}%")
+                
+                if ltv > 80:
+                    st.warning("⚠️ LTV cao hơn 80%")
+                elif ltv > 70:
+                    st.info("ℹ️ LTV trong khoảng 70-80%")
+                else:
+                    st.success("✅ LTV dưới 70%")
         
-        if st.button("💾 Lưu", key="save3"):
-            st.session_state.collateral_info['value'] = collateral_value
-            st.success("✅ Saved!")
+        if st.button("💾 Lưu Thay Đổi", key="save_collateral"):
+            st.session_state.collateral_info.update({
+                'type': collateral_type,
+                'value': collateral_value,
+                'area': collateral_area,
+                'address': collateral_address
+            })
+            st.session_state.data_modified = True
+            st.success("✅ Đã lưu thay đổi!")
     
+    # TAB 4: Chỉ tiêu và kế hoạch
     with tabs[3]:
-        st.subheader("📊 Chỉ Tiêu Tài Chính")
+        st.subheader("📊 Các Chỉ Tiêu Tài Chính & Kế Hoạch Trả Nợ")
+        
         metrics = calculate_financial_metrics(st.session_state.financial_info)
         
         if metrics:
             col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                st.metric("Gốc/tháng", f"{format_number(metrics.get('monthly_principal', 0))}")
-            with col2:
-                st.metric("Lãi T1", f"{format_number(metrics.get('first_month_interest', 0))}")
-            with col3:
-                st.metric("Tổng T1", f"{format_number(metrics.get('first_month_payment', 0))}")
-            with col4:
-                st.metric("DSCR", f"{metrics.get('dscr', 0):.2f}")
             
-            st.markdown("### Kế Hoạch Trả Nợ")
+            with col1:
+                st.metric("Trả nợ gốc/tháng", 
+                         f"{format_number(metrics.get('monthly_principal', 0))} đ")
+            with col2:
+                st.metric("Trả lãi tháng đầu", 
+                         f"{format_number(metrics.get('first_month_interest', 0))} đ")
+            with col3:
+                st.metric("Tổng trả tháng đầu", 
+                         f"{format_number(metrics.get('first_month_payment', 0))} đ")
+            with col4:
+                st.metric("Tổng lãi phải trả", 
+                         f"{format_number(metrics.get('total_interest', 0))} đ")
+            
+            st.markdown("---")
+            
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                st.metric("Thu nhập ròng/tháng", 
+                         f"{format_number(metrics.get('net_income', 0))} đ")
+            with col2:
+                debt_ratio = metrics.get('debt_service_ratio', 0)
+                st.metric("Tỷ lệ trả nợ/Thu nhập", 
+                         f"{debt_ratio:.2f}%",
+                         delta="Tốt" if debt_ratio < 40 else "Cao")
+            with col3:
+                st.metric("Số dư sau trả nợ", 
+                         f"{format_number(metrics.get('surplus', 0))} đ")
+            with col4:
+                dscr = metrics.get('dscr', 0)
+                st.metric("DSCR", 
+                         f"{dscr:.2f}",
+                         delta="Tốt" if dscr >= 1.25 else "Thấp")
+            
+            st.markdown("---")
+            st.markdown("### 📅 Kế Hoạch Trả Nợ Chi Tiết")
+            
             if 'repayment_schedule' in metrics:
                 df = metrics['repayment_schedule'].copy()
+                
                 for col in ['Dư nợ đầu kỳ', 'Trả gốc', 'Trả lãi', 'Tổng trả', 'Dư nợ cuối kỳ']:
                     df[col] = df[col].apply(lambda x: format_number(x))
+                
                 st.dataframe(df, use_container_width=True, height=400)
+                
                 st.session_state.repayment_schedule = metrics['repayment_schedule']
                 st.session_state.metrics = metrics
     
+    # TAB 5: Biểu đồ
     with tabs[4]:
-        st.subheader("📈 Biểu Đồ")
+        st.subheader("📈 Biểu Đồ Phân Tích")
+        
         if not PLOTLY_AVAILABLE:
-            st.warning("⚠️ Plotly not installed")
-        elif 'metrics' in st.session_state:
+            st.warning("⚠️ Thư viện Plotly chưa được cài đặt. Biểu đồ không khả dụng.")
+            st.info("Để sử dụng biểu đồ, vui lòng cài đặt: `pip install plotly`")
+        elif 'metrics' in st.session_state and st.session_state.metrics:
             metrics = st.session_state.metrics
+            
             col1, col2 = st.columns(2)
             
             with col1:
+                st.markdown("#### Cơ Cấu Thanh Toán Tháng Đầu")
                 payment_data = pd.DataFrame({
                     'Loại': ['Gốc', 'Lãi'],
-                    'Số tiền': [metrics.get('monthly_principal', 0), metrics.get('first_month_interest', 0)]
+                    'Số tiền': [
+                        metrics.get('monthly_principal', 0),
+                        metrics.get('first_month_interest', 0)
+                    ]
                 })
-                fig = px.pie(payment_data, values='Số tiền', names='Loại', title="Thanh toán T1")
-                st.plotly_chart(fig, use_container_width=True)
+                fig1 = px.pie(payment_data, values='Số tiền', names='Loại',
+                             color_discrete_sequence=['#1f77b4', '#ff7f0e'])
+                st.plotly_chart(fig1, use_container_width=True)
+                
+                st.markdown("#### Thu Chi Hàng Tháng")
+                income_expense_data = pd.DataFrame({
+                    'Loại': ['Thu nhập', 'Chi phí', 'Trả nợ', 'Còn lại'],
+                    'Số tiền': [
+                        st.session_state.financial_info.get('monthly_income', 0),
+                        st.session_state.financial_info.get('monthly_expense', 0),
+                        metrics.get('first_month_payment', 0),
+                        metrics.get('surplus', 0)
+                    ]
+                })
+                fig2 = px.bar(income_expense_data, x='Loại', y='Số tiền',
+                             color='Loại',
+                             color_discrete_sequence=['#2ca02c', '#d62728', '#ff7f0e', '#1f77b4'])
+                fig2.update_layout(showlegend=False)
+                st.plotly_chart(fig2, use_container_width=True)
             
             with col2:
                 if 'repayment_schedule' in metrics:
-                    fig = px.line(metrics['repayment_schedule'], x='Tháng', y='Dư nợ cuối kỳ', 
-                                 title="Dư nợ", markers=True)
-                    st.plotly_chart(fig, use_container_width=True)
-    
-    with tabs[5]:
-        st.subheader("🤖 AI Analysis")
-        if not api_key:
-            st.warning("⚠️ Enter API Key!")
+                    st.markdown("#### Diễn Biến Dư Nợ")
+                    schedule_df = metrics['repayment_schedule']
+                    fig3 = go.Figure()
+                    fig3.add_trace(go.Scatter(
+                        x=schedule_df['Tháng'],
+                        y=schedule_df['Dư nợ cuối kỳ'],
+                        mode='lines+markers',
+                        name='Dư nợ',
+                        line=dict(color='#1f77b4', width=2),
+                        marker=dict(size=6)
+                    ))
+                    fig3.update_layout(
+                        xaxis_title="Tháng",
+                        yaxis_title="Dư nợ (đồng)",
+                        hovermode='x unified'
+                    )
+                    st.plotly_chart(fig3, use_container_width=True)
+                    
+                    st.markdown("#### Gốc & Lãi Theo Tháng")
+                    fig4 = go.Figure()
+                    fig4.add_trace(go.Bar(
+                        x=schedule_df['Tháng'],
+                        y=schedule_df['Trả gốc'],
+                        name='Trả gốc',
+                        marker_color='#1f77b4'
+                    ))
+                    fig4.add_trace(go.Bar(
+                        x=schedule_df['Tháng'],
+                        y=schedule_df['Trả lãi'],
+                        name='Trả lãi',
+                        marker_color='#ff7f0e'
+                    ))
+                    fig4.update_layout(
+                        barmode='stack',
+                        xaxis_title="Tháng",
+                        yaxis_title="Số tiền (đồng)",
+                        hovermode='x unified'
+                    )
+                    st.plotly_chart(fig4, use_container_width=True)
         else:
-            with st.expander("📄 From File"):
-                if st.button("Analyze", key="af"):
+            st.info("Vui lòng nhập đầy đủ thông tin tài chính để xem biểu đồ")
+    
+    # TAB 6: Phân tích AI
+    with tabs[5]:
+        st.subheader("🤖 Phân Tích Bằng AI Gemini")
+        
+        if not api_key:
+            st.warning("⚠️ Vui lòng nhập API Key ở sidebar để sử dụng tính năng này!")
+        elif not GENAI_AVAILABLE:
+            st.error("⚠️ Thư viện google-generativeai chưa được cài đặt!")
+        else:
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown("### 📄 Phân Tích Từ File Upload")
+                if st.button("🔍 Phân Tích File", use_container_width=True):
                     if st.session_state.uploaded_content:
-                        with st.spinner("Analyzing..."):
-                            result = analyze_with_gemini(api_key, "file", st.session_state.uploaded_content)
-                            st.session_state.analysis_file = result
+                        with st.spinner("Đang phân tích..."):
+                            analysis = analyze_with_gemini(api_key, "file", st.session_state.uploaded_content)
+                            st.session_state.analysis_file = analysis
                 
                 if 'analysis_file' in st.session_state:
+                    st.markdown("#### Kết Quả Phân Tích:")
+                    st.info(f"**Nguồn dữ liệu:** File Upload (.docx)")
                     st.write(st.session_state.analysis_file)
             
-            with st.expander("📊 From Metrics"):
-                if st.button("Analyze", key="am"):
-                    if 'metrics' in st.session_state:
-                        data = f"Vay: {format_number(st.session_state.financial_info.get('loan_amount', 0))}\nDSCR: {st.session_state.metrics.get('dscr', 0):.2f}"
-                        with st.spinner("Analyzing..."):
-                            result = analyze_with_gemini(api_key, "metrics", data)
-                            st.session_state.analysis_metrics = result
+            with col2:
+                st.markdown("### 📊 Phân Tích Từ Các Chỉ Số")
+                if st.button("🔍 Phân Tích Chỉ Số", use_container_width=True):
+                    if 'metrics' in st.session_state and st.session_state.metrics:
+                        data_content = f"""
+THÔNG TIN KHÁCH HÀNG:
+- Họ và tên: {st.session_state.customer_info.get('name', 'N/A')}
+- Thu nhập hàng tháng: {format_number(st.session_state.financial_info.get('monthly_income', 0))} đồng
+- Chi phí hàng tháng: {format_number(st.session_state.financial_info.get('monthly_expense', 0))} đồng
+
+THÔNG TIN VAY VỐN:
+- Số tiền vay: {format_number(st.session_state.financial_info.get('loan_amount', 0))} đồng
+- Lãi suất: {st.session_state.financial_info.get('interest_rate', 0)}%/năm
+- Thời hạn: {st.session_state.financial_info.get('loan_term', 0)} tháng
+
+CÁC CHỈ TIÊU TÀI CHÍNH:
+- Trả nợ hàng tháng: {format_number(st.session_state.metrics.get('first_month_payment', 0))} đồng
+- Thu nhập ròng: {format_number(st.session_state.metrics.get('net_income', 0))} đồng
+- Tỷ lệ trả nợ/thu nhập: {st.session_state.metrics.get('debt_service_ratio', 0):.2f}%
+- DSCR: {st.session_state.metrics.get('dscr', 0):.2f}
+- Số dư sau trả nợ: {format_number(st.session_state.metrics.get('surplus', 0))} đồng
+- Tổng lãi phải trả: {format_number(st.session_state.metrics.get('total_interest', 0))} đồng
+
+TÀI SẢN ĐẢM BẢO:
+- Loại: {st.session_state.collateral_info.get('type', 'N/A')}
+- Giá trị: {format_number(st.session_state.collateral_info.get('value', 0))} đồng
+- LTV: {(st.session_state.financial_info.get('loan_amount', 0) / st.session_state.collateral_info.get('value', 1) * 100):.2f}%
+"""
+                        with st.spinner("Đang phân tích..."):
+                            analysis = analyze_with_gemini(api_key, "metrics", data_content)
+                            st.session_state.analysis_metrics = analysis
                 
                 if 'analysis_metrics' in st.session_state:
+                    st.markdown("#### Kết Quả Phân Tích:")
+                    st.info(f"**Nguồn dữ liệu:** Các chỉ số tài chính đã nhập")
                     st.write(st.session_state.analysis_metrics)
     
+    # TAB 7: Chatbox AI
     with tabs[6]:
-        st.subheader("💬 Chat")
+        st.subheader("💬 Chatbox AI Gemini")
+        
         if not api_key:
-            st.warning("⚠️ Enter API Key!")
+            st.warning("⚠️ Vui lòng nhập API Key ở sidebar để sử dụng tính năng này!")
+        elif not GENAI_AVAILABLE:
+            st.error("⚠️ Thư viện google-generativeai chưa được cài đặt!")
         else:
-            for chat in st.session_state.chat_history:
-                role = "👤" if chat['role'] == 'user' else "🤖"
-                st.markdown(f"**{role}:** {chat['content']}")
+            chat_container = st.container()
+            with chat_container:
+                for i, chat in enumerate(st.session_state.chat_history):
+                    if chat['role'] == 'user':
+                        st.markdown(f"**👤 Bạn:** {chat['content']}")
+                    else:
+                        st.markdown(f"**🤖 AI:** {chat['content']}")
+                    st.markdown("---")
             
             col1, col2 = st.columns([5, 1])
             with col1:
-                user_input = st.text_input("Question:", key="ci")
+                user_input = st.text_input("Nhập câu hỏi của bạn:", key="chat_input")
             with col2:
-                if st.button("Send"):
+                if st.button("Gửi", use_container_width=True):
                     if user_input:
-                        st.session_state.chat_history.append({'role': 'user', 'content': user_input})
-                        with st.spinner("..."):
-                            success, response = call_gemini_api(api_key, user_input)
-                            st.session_state.chat_history.append({'role': 'assistant', 'content': response})
+                        st.session_state.chat_history.append({
+                            'role': 'user',
+                            'content': user_input
+                        })
+                        
+                        context = f"""
+Thông tin khách hàng và dự án:
+- Tên: {st.session_state.customer_info.get('name', 'N/A')}
+- Số tiền vay: {format_number(st.session_state.financial_info.get('loan_amount', 0))} đồng
+- Lãi suất: {st.session_state.financial_info.get('interest_rate', 0)}%
+- Thu nhập: {format_number(st.session_state.financial_info.get('monthly_income', 0))} đồng/tháng
+"""
+                        
+                        with st.spinner("AI đang suy nghĩ..."):
+                            try:
+                                # Rate limiting
+                                current_time = time.time()
+                                time_since_last = current_time - st.session_state.last_request_time
+                                if time_since_last < 2:
+                                    time.sleep(2 - time_since_last)
+                                
+                                configure_gemini(api_key)
+                                
+                                def chat_request():
+                                    model = genai.GenerativeModel('gemini-2.0-flash')
+                                    prompt = f"{context}\n\nCâu hỏi: {user_input}"
+                                    response = model.generate_content(prompt)
+                                    st.session_state.last_request_time = time.time()
+                                    return response.text
+                                
+                                ai_response = retry_with_backoff(chat_request)
+                                
+                                st.session_state.chat_history.append({
+                                    'role': 'assistant',
+                                    'content': ai_response
+                                })
+                            except Exception as e:
+                                ai_response = f"❌ Lỗi: {str(e)}"
+                                st.session_state.chat_history.append({
+                                    'role': 'assistant',
+                                    'content': ai_response
+                                })
+                        
                         st.rerun()
             
-            if st.button("Clear"):
+            if st.button("🗑️ Xóa Lịch Sử Chat", use_container_width=True):
                 st.session_state.chat_history = []
                 st.rerun()
     
+    # TAB 8: Xuất dữ liệu
     with tabs[7]:
-        st.subheader("📥 Export")
-        opt = st.radio("Type:", ["Excel", "Word"])
+        st.subheader("📥 Xuất Dữ Liệu")
         
-        if opt == "Excel":
+        export_option = st.selectbox(
+            "Chọn loại dữ liệu xuất:",
+            ["Bảng kế hoạch trả nợ (Excel)", "Báo cáo thẩm định (Word)"]
+        )
+        
+        if export_option == "Bảng kế hoạch trả nợ (Excel)":
+            st.markdown("### 📊 Xuất Bảng Kế Hoạch Trả Nợ")
+            
             if 'repayment_schedule' in st.session_state:
-                data = export_to_excel(st.session_state.repayment_schedule)
-                st.download_button("📥 Download", data, f"plan_{datetime.now().strftime('%Y%m%d')}.xlsx",
-                                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-        else:
-            if 'metrics' in st.session_state:
-                data = export_appraisal_report(
-                    st.session_state.customer_info, st.session_state.financial_info,
-                    st.session_state.collateral_info, st.session_state.metrics,
-                    st.session_state.get('analysis_file', ''), st.session_state.get('analysis_metrics', '')
+                st.dataframe(st.session_state.repayment_schedule, use_container_width=True)
+                
+                excel_data = export_to_excel(st.session_state.repayment_schedule)
+                st.download_button(
+                    label="📥 Tải Xuống Excel",
+                    data=excel_data,
+                    file_name=f"ke_hoach_tra_no_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True
                 )
-                st.download_button("📥 Download", data, f"report_{datetime.now().strftime('%Y%m%d')}.docx",
-                                 "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+            else:
+                st.warning("⚠️ Chưa có dữ liệu kế hoạch trả nợ!")
+        
+        else:
+            st.markdown("### 📄 Xuất Báo Cáo Thẩm Định")
+            
+            if 'metrics' in st.session_state:
+                analysis_file = st.session_state.get('analysis_file', '')
+                analysis_metrics = st.session_state.get('analysis_metrics', '')
+                
+                word_data = export_appraisal_report(
+                    st.session_state.customer_info,
+                    st.session_state.financial_info,
+                    st.session_state.collateral_info,
+                    st.session_state.metrics,
+                    analysis_file,
+                    analysis_metrics
+                )
+                
+                st.download_button(
+                    label="📥 Tải Xuống Word",
+                    data=word_data,
+                    file_name=f"bao_cao_tham_dinh_{datetime.now().strftime('%Y%m%d')}.docx",
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    use_container_width=True
+                )
+            else:
+                st.warning("⚠️ Chưa có dữ liệu để xuất báo cáo!")
 
 else:
     st.markdown("""
     <div style='text-align: center; padding: 3rem;'>
-        <h2>👋 Welcome</h2>
-        <p>Upload PASDV.docx in sidebar to start!</p>
+        <h2>👋 Chào Mừng Đến Với Hệ Thống Thẩm Định</h2>
+        <p style='font-size: 1.2rem; color: #666;'>
+            Vui lòng upload file phương án sử dụng vốn (.docx) ở sidebar để bắt đầu!
+        </p>
     </div>
     """, unsafe_allow_html=True)
+    
+    st.markdown("---")
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.markdown("""
+        ### 📤 Bước 1: Upload File
+        - Click vào sidebar bên trái
+        - Chọn file PASDV.docx
+        - Click "Trích xuất dữ liệu"
+        """)
+    
+    with col2:
+        st.markdown("""
+        ### ✏️ Bước 2: Chỉnh Sửa
+        - Xem và chỉnh sửa thông tin
+        - Sử dụng nút +/- để điều chỉnh
+        - Lưu thay đổi khi cần
+        """)
+    
+    with col3:
+        st.markdown("""
+        ### 📊 Bước 3: Phân Tích
+        - Xem các chỉ tiêu tài chính
+        - Phân tích bằng AI
+        - Xuất báo cáo
+        """)
+    
+    st.markdown("---")
+    
+    with st.expander("ℹ️ Hướng dẫn lấy Gemini API Key"):
+        st.markdown("""
+        1. Truy cập: https://aistudio.google.com/app/apikey
+        2. Đăng nhập bằng tài khoản Google
+        3. Click "Create API Key"
+        4. Copy API Key và paste vào ô bên sidebar
+        """)
 
+# Footer
 st.markdown("---")
-st.markdown("<div style='text-align: center;'><p>🏦 v3.0 - REST API</p></div>", unsafe_allow_html=True)
+st.markdown("""
+<div style='text-align: center; color: #666; padding: 1rem;'>
+    <p>🏦 Hệ Thống Thẩm Định Phương Án Kinh Doanh v1.2</p>
+    <p>Powered by Streamlit & Google Gemini 2.0 Flash AI</p>
+</div>
+""", unsafe_allow_html=True)
