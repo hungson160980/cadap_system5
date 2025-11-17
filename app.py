@@ -215,10 +215,26 @@ def format_number(num):
     except:
         return str(num)
 
+def format_number_international(num):
+    """Định dạng số theo chuẩn quốc tế (dấu phẩy phân cách hàng nghìn)"""
+    try:
+        return "{:,.0f}".format(float(num))
+    except:
+        return str(num)
+
 def parse_number(text):
     """Chuyển đổi text thành số"""
     try:
         clean_text = str(text).replace(".", "").replace(",", ".")
+        return float(clean_text)
+    except:
+        return 0
+
+def parse_number_international(text):
+    """Chuyển đổi text theo chuẩn quốc tế thành số"""
+    try:
+        # Loại bỏ dấu phẩy (thousands separator)
+        clean_text = str(text).replace(",", "")
         return float(clean_text)
     except:
         return 0
@@ -612,8 +628,7 @@ if st.session_state.data_extracted:
         "🏠 Tài sản",
         "📊 Chỉ tiêu",
         "📅 Lịch trả nợ",
-        "🤖 AI File",
-        "🤖 AI Metrics",
+        "🤖 Phân tích AI",
         "💬 Chatbot",
         "📥 Xuất file"
     ])
@@ -652,24 +667,28 @@ if st.session_state.data_extracted:
         
         with col1:
             st.markdown("**Nhu cầu vốn**")
-            total_need = st.number_input(
+            
+            # Display formatted value
+            total_need_display = st.text_input(
                 "Tổng nhu cầu (đồng)",
-                value=float(st.session_state.financial_info.get('total_need', 0)),
-                step=1000000.0,
-                format="%.0f"
+                value=format_number_international(st.session_state.financial_info.get('total_need', 0)),
+                key="total_need_display"
             )
-            equity = st.number_input(
+            total_need = parse_number_international(total_need_display)
+            
+            equity_display = st.text_input(
                 "Vốn đối ứng (đồng)",
-                value=float(st.session_state.financial_info.get('equity', 0)),
-                step=1000000.0,
-                format="%.0f"
+                value=format_number_international(st.session_state.financial_info.get('equity', 0)),
+                key="equity_display"
             )
-            loan_amount = st.number_input(
+            equity = parse_number_international(equity_display)
+            
+            loan_amount_display = st.text_input(
                 "Số tiền vay (đồng)",
-                value=float(st.session_state.financial_info.get('loan_amount', 0)),
-                step=1000000.0,
-                format="%.0f"
+                value=format_number_international(st.session_state.financial_info.get('loan_amount', 0)),
+                key="loan_amount_display"
             )
+            loan_amount = parse_number_international(loan_amount_display)
         
         with col2:
             st.markdown("**Điều kiện vay**")
@@ -691,24 +710,27 @@ if st.session_state.data_extracted:
         
         with col3:
             st.markdown("**Thu chi hàng tháng**")
-            monthly_income = st.number_input(
+            
+            monthly_income_display = st.text_input(
                 "Thu nhập (đồng/tháng)",
-                value=float(st.session_state.financial_info.get('monthly_income', 0)),
-                step=1000000.0,
-                format="%.0f"
+                value=format_number_international(st.session_state.financial_info.get('monthly_income', 0)),
+                key="monthly_income_display"
             )
-            monthly_expense = st.number_input(
+            monthly_income = parse_number_international(monthly_income_display)
+            
+            monthly_expense_display = st.text_input(
                 "Chi phí (đồng/tháng)",
-                value=float(st.session_state.financial_info.get('monthly_expense', 0)),
-                step=1000000.0,
-                format="%.0f"
+                value=format_number_international(st.session_state.financial_info.get('monthly_expense', 0)),
+                key="monthly_expense_display"
             )
-            project_income = st.number_input(
+            monthly_expense = parse_number_international(monthly_expense_display)
+            
+            project_income_display = st.text_input(
                 "Thu từ dự án (đồng/tháng)",
-                value=float(st.session_state.financial_info.get('project_income', 0)),
-                step=1000000.0,
-                format="%.0f"
+                value=format_number_international(st.session_state.financial_info.get('project_income', 0)),
+                key="project_income_display"
             )
+            project_income = parse_number_international(project_income_display)
         
         if st.button("💾 Lưu Thông Tin Tài Chính", use_container_width=True):
             st.session_state.financial_info.update({
@@ -724,6 +746,7 @@ if st.session_state.data_extracted:
             })
             st.session_state.data_modified = True
             st.success("✅ Đã lưu thông tin tài chính!")
+            st.rerun()
     
     # TAB 3: Tài sản đảm bảo
     with tabs[2]:
@@ -736,12 +759,13 @@ if st.session_state.data_extracted:
                 "Loại tài sản",
                 value=st.session_state.collateral_info.get('type', '')
             )
-            collateral_value = st.number_input(
+            
+            collateral_value_display = st.text_input(
                 "Giá trị (đồng)",
-                value=float(st.session_state.collateral_info.get('value', 0)),
-                step=1000000.0,
-                format="%.0f"
+                value=format_number_international(st.session_state.collateral_info.get('value', 0)),
+                key="collateral_value_display"
             )
+            collateral_value = parse_number_international(collateral_value_display)
         
         with col2:
             collateral_address = st.text_area(
@@ -749,12 +773,13 @@ if st.session_state.data_extracted:
                 value=st.session_state.collateral_info.get('address', ''),
                 height=100
             )
-            area = st.number_input(
+            
+            area_display = st.text_input(
                 "Diện tích (m²)",
-                value=float(st.session_state.collateral_info.get('area', 0)),
-                step=1.0,
-                format="%.2f"
+                value=format_number_international(st.session_state.collateral_info.get('area', 0)),
+                key="area_display"
             )
+            area = parse_number_international(area_display)
         
         if st.button("💾 Lưu Thông Tin Tài Sản", use_container_width=True):
             st.session_state.collateral_info.update({
@@ -765,6 +790,7 @@ if st.session_state.data_extracted:
             })
             st.session_state.data_modified = True
             st.success("✅ Đã lưu thông tin tài sản!")
+            st.rerun()
     
     # TAB 4: Các chỉ tiêu tài chính
     with tabs[3]:
@@ -996,40 +1022,55 @@ if st.session_state.data_extracted:
                 
                 st.plotly_chart(fig, use_container_width=True)
     
-    # TAB 6: Phân tích AI (File)
+    # TAB 6: Phân tích AI (Gộp File và Metrics)
     with tabs[5]:
-        st.subheader("🤖 Phân Tích AI - File Gốc")
+        st.subheader("🤖 Phân Tích AI Gemini")
         
         if not api_key:
-            st.warning("⚠️ Vui lòng nhập API Key ở sidebar!")
+            st.warning("⚠️ Vui lòng nhập API Key ở sidebar để sử dụng tính năng này!")
         elif not GENAI_AVAILABLE:
             st.error("⚠️ Thư viện google-generativeai chưa được cài đặt!")
         else:
-            if st.session_state.uploaded_content:
-                if st.button("🔍 Phân Tích File Gốc", use_container_width=True):
-                    with st.spinner("Đang phân tích..."):
-                        analysis = analyze_with_gemini(api_key, "file", st.session_state.uploaded_content)
-                        st.session_state.analysis_file = analysis
+            # Chọn loại phân tích
+            analysis_type = st.radio(
+                "Chọn nguồn dữ liệu để phân tích:",
+                ["📄 Phân tích từ File gốc", "📊 Phân tích từ Chỉ số tài chính"],
+                horizontal=True
+            )
+            
+            st.markdown("---")
+            
+            if analysis_type == "📄 Phân tích từ File gốc":
+                st.markdown("### 📄 Phân Tích File Gốc")
+                st.info("💡 Phân tích này dựa trên toàn bộ nội dung file PASDV bạn đã upload")
                 
-                if 'analysis_file' in st.session_state:
-                    st.markdown("#### Kết Quả Phân Tích:")
-                    st.info(f"**Nguồn dữ liệu:** File gốc đã upload")
-                    st.write(st.session_state.analysis_file)
-            else:
-                st.warning("⚠️ Chưa có nội dung file để phân tích!")
-    
-    # TAB 7: Phân tích AI (Metrics)
-    with tabs[6]:
-        st.subheader("🤖 Phân Tích AI - Chỉ Số Tài Chính")
-        
-        if not api_key:
-            st.warning("⚠️ Vui lòng nhập API Key ở sidebar!")
-        elif not GENAI_AVAILABLE:
-            st.error("⚠️ Thư viện google-generativeai chưa được cài đặt!")
-        else:
-            if 'metrics' in st.session_state:
-                if st.button("🔍 Phân Tích Chỉ Số", use_container_width=True):
-                    data_content = f"""
+                if st.session_state.uploaded_content:
+                    if st.button("🔍 Phân Tích File Gốc", use_container_width=True, key="analyze_file"):
+                        with st.spinner("Đang phân tích file gốc..."):
+                            analysis = analyze_with_gemini(api_key, "file", st.session_state.uploaded_content)
+                            st.session_state.analysis_file = analysis
+                    
+                    if 'analysis_file' in st.session_state:
+                        st.markdown("#### 📋 Kết Quả Phân Tích:")
+                        st.success("**✓ Nguồn dữ liệu:** File PASDV gốc đã upload")
+                        
+                        # Hiển thị kết quả trong box
+                        with st.container():
+                            st.markdown("""
+                            <div style='background-color: #f8f9fa; padding: 20px; border-radius: 10px; border-left: 4px solid #1f77b4;'>
+                            """, unsafe_allow_html=True)
+                            st.write(st.session_state.analysis_file)
+                            st.markdown("</div>", unsafe_allow_html=True)
+                else:
+                    st.warning("⚠️ Chưa có nội dung file để phân tích! Vui lòng upload file ở sidebar.")
+            
+            else:  # Phân tích từ chỉ số tài chính
+                st.markdown("### 📊 Phân Tích Chỉ Số Tài Chính")
+                st.info("💡 Phân tích này dựa trên các chỉ số tài chính đã được tính toán")
+                
+                if 'metrics' in st.session_state:
+                    if st.button("🔍 Phân Tích Chỉ Số Tài Chính", use_container_width=True, key="analyze_metrics"):
+                        data_content = f"""
 THÔNG TIN KHÁCH HÀNG:
 - Tên: {st.session_state.customer_info.get('name', 'N/A')}
 - CCCD: {st.session_state.customer_info.get('cccd', 'N/A')}
@@ -1056,17 +1097,26 @@ TÀI SẢN ĐẢM BẢO:
 - Giá trị: {format_number(st.session_state.collateral_info.get('value', 0))} đồng
 - LTV: {(st.session_state.financial_info.get('loan_amount', 0) / st.session_state.collateral_info.get('value', 1) * 100):.2f}%
 """
-                    with st.spinner("Đang phân tích..."):
-                        analysis = analyze_with_gemini(api_key, "metrics", data_content)
-                        st.session_state.analysis_metrics = analysis
-                
-                if 'analysis_metrics' in st.session_state:
-                    st.markdown("#### Kết Quả Phân Tích:")
-                    st.info(f"**Nguồn dữ liệu:** Các chỉ số tài chính đã nhập")
-                    st.write(st.session_state.analysis_metrics)
+                        with st.spinner("Đang phân tích các chỉ số tài chính..."):
+                            analysis = analyze_with_gemini(api_key, "metrics", data_content)
+                            st.session_state.analysis_metrics = analysis
+                    
+                    if 'analysis_metrics' in st.session_state:
+                        st.markdown("#### 📋 Kết Quả Phân Tích:")
+                        st.success("**✓ Nguồn dữ liệu:** Các chỉ số tài chính đã tính toán")
+                        
+                        # Hiển thị kết quả trong box
+                        with st.container():
+                            st.markdown("""
+                            <div style='background-color: #f8f9fa; padding: 20px; border-radius: 10px; border-left: 4px solid #1f77b4;'>
+                            """, unsafe_allow_html=True)
+                            st.write(st.session_state.analysis_metrics)
+                            st.markdown("</div>", unsafe_allow_html=True)
+                else:
+                    st.warning("⚠️ Chưa có dữ liệu chỉ số tài chính! Vui lòng tính toán ở Tab 'Chỉ tiêu' trước.")
     
-    # TAB 8: Chatbox AI
-    with tabs[7]:
+    # TAB 7: Chatbox AI
+    with tabs[6]:
         st.subheader("💬 Chatbot AI Gemini")
         
         if not api_key:
@@ -1137,8 +1187,8 @@ Thông tin khách hàng và dự án:
                 st.session_state.chat_history = []
                 st.rerun()
     
-    # TAB 9: Xuất dữ liệu
-    with tabs[8]:
+    # TAB 8: Xuất dữ liệu
+    with tabs[7]:
         st.subheader("📥 Xuất Dữ Liệu")
         
         export_option = st.selectbox(
