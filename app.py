@@ -842,6 +842,108 @@ if st.session_state.data_extracted:
                     st.warning("⚠️ LTV trung bình")
                 else:
                     st.error("❌ LTV cao")
+            
+            # Biểu đồ phân tích
+            if PLOTLY_AVAILABLE:
+                st.markdown("---")
+                st.markdown("### 📊 Biểu Đồ Phân Tích")
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    # Biểu đồ cơ cấu trả gốc lãi tháng đầu
+                    loan_amount = st.session_state.financial_info.get('loan_amount', 0)
+                    interest_rate = st.session_state.financial_info.get('interest_rate', 0)
+                    monthly_rate = (interest_rate / 100) / 12
+                    
+                    interest_first_month = loan_amount * monthly_rate
+                    principal_first_month = metrics.get('first_month_payment', 0) - interest_first_month
+                    
+                    fig_pie = go.Figure(data=[go.Pie(
+                        labels=['Tiền gốc', 'Tiền lãi'],
+                        values=[principal_first_month, interest_first_month],
+                        marker=dict(colors=['#1f77b4', '#ff7f0e']),
+                        textinfo='label+percent+value',
+                        texttemplate='<b>%{label}</b><br>%{percent}<br>%{value:,.0f} đ',
+                        hovertemplate='<b>%{label}</b><br>Số tiền: %{value:,.0f} đồng<br>Tỷ lệ: %{percent}<extra></extra>'
+                    )])
+                    
+                    fig_pie.update_layout(
+                        title='Cơ Cấu Trả Nợ Tháng Đầu',
+                        height=400,
+                        showlegend=True
+                    )
+                    
+                    st.plotly_chart(fig_pie, use_container_width=True)
+                
+                with col2:
+                    # Biểu đồ thu nhập, chi phí, trả nợ
+                    monthly_income = st.session_state.financial_info.get('monthly_income', 0)
+                    project_income = st.session_state.financial_info.get('project_income', 0)
+                    monthly_expense = st.session_state.financial_info.get('monthly_expense', 0)
+                    monthly_payment = metrics.get('first_month_payment', 0)
+                    
+                    total_income = monthly_income + project_income
+                    surplus = metrics.get('surplus', 0)
+                    
+                    fig_bar = go.Figure()
+                    
+                    fig_bar.add_trace(go.Bar(
+                        name='Thu nhập',
+                        x=['Tài chính hàng tháng'],
+                        y=[total_income],
+                        marker_color='#2ecc71',
+                        text=[f'{format_number(total_income)}'],
+                        textposition='outside',
+                        hovertemplate='<b>Thu nhập</b><br>%{y:,.0f} đồng<extra></extra>'
+                    ))
+                    
+                    fig_bar.add_trace(go.Bar(
+                        name='Chi phí sinh hoạt',
+                        x=['Tài chính hàng tháng'],
+                        y=[monthly_expense],
+                        marker_color='#e74c3c',
+                        text=[f'{format_number(monthly_expense)}'],
+                        textposition='outside',
+                        hovertemplate='<b>Chi phí sinh hoạt</b><br>%{y:,.0f} đồng<extra></extra>'
+                    ))
+                    
+                    fig_bar.add_trace(go.Bar(
+                        name='Trả nợ hàng tháng',
+                        x=['Tài chính hàng tháng'],
+                        y=[monthly_payment],
+                        marker_color='#f39c12',
+                        text=[f'{format_number(monthly_payment)}'],
+                        textposition='outside',
+                        hovertemplate='<b>Trả nợ hàng tháng</b><br>%{y:,.0f} đồng<extra></extra>'
+                    ))
+                    
+                    fig_bar.add_trace(go.Bar(
+                        name='Số dư sau trả nợ',
+                        x=['Tài chính hàng tháng'],
+                        y=[surplus],
+                        marker_color='#3498db' if surplus > 0 else '#e74c3c',
+                        text=[f'{format_number(surplus)}'],
+                        textposition='outside',
+                        hovertemplate='<b>Số dư</b><br>%{y:,.0f} đồng<extra></extra>'
+                    ))
+                    
+                    fig_bar.update_layout(
+                        title='Thu Nhập, Chi Phí & Trả Nợ Hàng Tháng',
+                        yaxis_title='Số tiền (đồng)',
+                        height=400,
+                        barmode='group',
+                        showlegend=True,
+                        legend=dict(
+                            orientation="h",
+                            yanchor="bottom",
+                            y=1.02,
+                            xanchor="right",
+                            x=1
+                        )
+                    )
+                    
+                    st.plotly_chart(fig_bar, use_container_width=True)
     
     # TAB 5: Lịch trả nợ
     with tabs[4]:
